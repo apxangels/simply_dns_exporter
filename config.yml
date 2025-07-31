@@ -1,0 +1,14 @@
+listen_address: ":9116"    # exporter port
+modules:
+  google-dns:              # module_name
+    prober: dns            # now is only dns, not dot, doh
+    protocol: ipv4         # supports ipv4 
+    query_type: A          # A or MX record
+    server: "8.8.8.8"      # DNS server
+    timeout: 5s            # Request timeout
+  cloudflare-dns:
+    prober: dns
+    protocol: ipv4
+    query_type: MX
+    server: "1.1.1.1"
+    timeout: 5s

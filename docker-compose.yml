@@ -1,0 +1,9 @@
+services:
+  simply_dns_exporter:
+    image: duoluotianshi/simply_dns_exporter:0.1
+    container_name: simply_dns_exporter
+    ports:
+      - "9116:9116"
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+    restart: unless-stopped
