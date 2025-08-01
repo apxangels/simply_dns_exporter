@@ -58,18 +58,16 @@ dnsp_probe_success 1.0
 dnsp_probe_dns_rcode{rcode="NOERROR"} 1.0
 # HELP dnsp_probe_dns_duration_seconds DNS probe durations
 # TYPE dnsp_probe_dns_duration_seconds gauge
-dnsp_probe_dns_duration_seconds{phase="connect"} 0.015702681999982815
-dnsp_probe_dns_duration_seconds{phase="request"} 0.019094721000101345
-dnsp_probe_dns_duration_seconds{phase="resolve"} 0.03514176699991367
+dnsp_probe_dns_duration_seconds{phase="connect"} 0.01900535098684486
+dnsp_probe_dns_duration_seconds{phase="request"} 0.039169208001112565
+dnsp_probe_dns_duration_seconds{phase="resolve"} 0.05840433201228734
 # HELP dnsp_probe_ttl_seconds Min TTL for A records
 # TYPE dnsp_probe_ttl_seconds gauge
-dnsp_probe_ttl_seconds 328.0
+dnsp_probe_ttl_seconds 300.0
 # HELP dnsp_probe_ip_addr Resolved A record
 # TYPE dnsp_probe_ip_addr gauge
-dnsp_probe_ip_addr{domain="ya.ru",ip_A_record="5.255.255.242"} 1.0
-dnsp_probe_ip_addr{domain="ya.ru",ip_A_record="77.88.44.242"} 1.0
-dnsp_probe_ip_addr{domain="ya.ru",ip_A_record="77.88.55.242"} 1.0
-# HELP dnsp_probe_ip_addr_hash SHA256 hash of sorted A records
+dnsp_probe_ip_addr{domain="ya.ru",ip_A_record="185.71.64.200"} 1.0
+# HELP dnsp_probe_ip_addr_hash murmurhash2 hash of sorted A records
 # TYPE dnsp_probe_ip_addr_hash gauge
-dnsp_probe_ip_addr_hash{hash="4deea5ba9281c236f802b4a87bd81bea222f61f17dd6b1c5d2bb02cc43a56f98"} 1.0
+dnsp_probe_ip_addr_hash 7.44122439e+08
 ```
