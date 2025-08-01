@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-import hashlib
+
+from murmurhash2 import murmurhash2
+
 import socket
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,8 +28,9 @@ def parse_duration(s: str) -> float:
         return float(s[:-1])
     return float(s)
 
-def sha256_hex(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def hash_fun(text: str) -> str:
+    SEED = 228322
+    return murmurhash2(text.encode("utf-8"), SEED)
 
 def dns_query_a_udp(name: str, server: str, timeout: float):
     # Create DNS query
@@ -142,7 +145,7 @@ class ProbeHandler(BaseHTTPRequestHandler):
         g_ttl = Gauge("dnsp_probe_ttl_seconds", "Min TTL for A records", registry=registry)
         if query_type == "A":
             g_ip = Gauge("dnsp_probe_ip_addr", "Resolved A record", ["domain", "ip_A_record"], registry=registry)
-            g_hash = Gauge("dnsp_probe_ip_addr_hash", "SHA256 hash of sorted A records", ["hash"], registry=registry)
+            g_hash = Gauge("dnsp_probe_ip_addr_hash", "murmurhash2 hash of sorted A records", registry=registry)
         if query_type == "MX":
             g_mx = Gauge("dnsp_probe_mx_record", "Resolved MX record", ["domain", "exchange", "preference"], registry=registry)
 
@@ -174,7 +177,7 @@ class ProbeHandler(BaseHTTPRequestHandler):
                         if min_ttl is not None:
                             g_ttl.set(float(min_ttl))
                         hash_input = ",".join(sorted(ip_list))
-                        g_hash.labels(hash=sha256_hex(hash_input)).set(1)
+                        g_hash.set(hash_fun(hash_input))
                         success = 1
             elif query_type == "MX":
                 resp, req_time = dns_query_mx_udp(target, server_ip, timeout_s)
