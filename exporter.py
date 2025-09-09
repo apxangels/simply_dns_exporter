@@ -144,10 +144,37 @@ class ProbeHandler(BaseHTTPRequestHandler):
         g_dur = Gauge("dnsp_probe_dns_duration_seconds", "DNS probe durations", ["phase"], registry=registry)
         g_ttl = Gauge("dnsp_probe_ttl_seconds", "Min TTL for A records", registry=registry)
         if query_type == "A":
-            g_ip = Gauge("dnsp_probe_ip_addr", "Resolved A record", ["domain", "ip_A_record"], registry=registry)
-            g_hash = Gauge("dnsp_probe_ip_addr_hash", "murmurhash2 hash of sorted A records", registry=registry)
+                g_ip = Gauge(
+                    "dnsp_probe_ip_addr",
+                    "Resolved A record",
+                    ["domain", "ip_A_record"],
+                    registry=registry,
+                )
+                g_ip_all = Gauge(
+                    "dnsp_probe_ip_addr_all",
+                    "All resolved A records in one label",
+                    ["domain", "ip_A_record"],
+                    registry=registry,
+                )
+                g_hash = Gauge(
+                    "dnsp_probe_ip_addr_hash",
+                    "murmurhash2 hash of sorted A records (duplicated per record)",
+                    ["domain", "ip_A_record"],
+                    registry=registry,
+                )
+                g_hash_all = Gauge(
+                    "dnsp_probe_ip_addr_hash_all",
+                    "murmurhash2 hash of sorted A records (all records in one label)",
+                    ["domain", "ip_A_record"],
+                    registry=registry,
+                )
         if query_type == "MX":
-            g_mx = Gauge("dnsp_probe_mx_record", "Resolved MX record", ["domain", "exchange", "preference"], registry=registry)
+            g_mx = Gauge(
+                "dnsp_probe_mx_record", 
+                "Resolved MX record", 
+                ["domain", "exchange", "preference"], 
+                registry=registry
+            )
 
         overall_start = time.perf_counter()
         success = 0
@@ -172,13 +199,25 @@ class ProbeHandler(BaseHTTPRequestHandler):
                 if rcode_val == dns.rcode.NOERROR:
                     ip_list, min_ttl = extract_a_records_and_min_ttl(resp)
                     if ip_list:
-                        for ip in sorted(set(ip_list)):
+                        sorted_ips = sorted(set(ip_list))
+
+                        for ip in sorted_ips:
                             g_ip.labels(domain=target, ip_A_record=ip).set(1)
+                            # hash by each ip in a record
+                            g_hash.labels(domain=target, ip_A_record=ip).set(hash_fun(ip))
+
                         if min_ttl is not None:
                             g_ttl.set(float(min_ttl))
-                        hash_input = ",".join(sorted(ip_list))
-                        g_hash.set(hash_fun(hash_input))
+
+                        # hash by concated ips
+                        hash_input = ",".join(sorted_ips)
+                        hash_val = hash_fun(hash_input)
+
+                        g_ip_all.labels(domain=target, ip_A_record=",".join(sorted_ips)).set(1)
+                        g_hash_all.labels(domain=target, ip_A_record=",".join(sorted_ips)).set(hash_val)
+
                         success = 1
+
             elif query_type == "MX":
                 resp, req_time = dns_query_mx_udp(target, server_ip, timeout_s)
                 g_dur.labels(phase="request").set(req_time)
