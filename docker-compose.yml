@@ -1,6 +1,6 @@
 services:
   simply_dns_exporter:
-    image: apxangels/simply_dns_exporter:0.3
+    image: apxangels/simply-dns-exporter:latest
     container_name: simply_dns_exporter
     ports:
       - "9116:9116"
