@@ -28,7 +28,7 @@ docker compose up -d
 ```
 Or download from hub:
 ```
-docker pull duoluotianshi/simply_dns_exporter:latest
+docker pull apxangels/simply-dns-exporter:latest
 ```
 ## How to configure
 A sample configuration file might look like this
