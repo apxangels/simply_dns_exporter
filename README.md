@@ -1,4 +1,4 @@
-[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-simply--dns--exporter-blue?logo=docker)](https://hub.docker.com/r/apxangels/simply_dns_exporter)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-simply--dns--exporter-blue?logo=docker)](https://hub.docker.com/r/apxangels/simply-dns-exporter)
 
 # Simply DNS exporter
 This exporter is designed as an alternative to checks performed using dns_exporter or blackbox_exporter, which do not support probing multiple targets through a single server. It is simple and fast, allowing you to check many targets at once and monitor their DNS records. </br>
