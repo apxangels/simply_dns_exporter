@@ -330,8 +330,8 @@ class ProbeHandler(BaseHTTPRequestHandler):
         )
         g_record_hash_all = Gauge(
             "dnsp_probe_dig_record_hash_all",
-            "murmurhash2 hash of all sorted values for one record_name/record_type",
-            ["record_name", "record_type"],
+            "murmurhash2 hash of all sorted values for one record_name/record_type, concatenated in the 'value' label",
+            ["record_name", "record_type", "value"],
             registry=registry,
         )
         g_domain_hash = Gauge(
@@ -386,7 +386,7 @@ class ProbeHandler(BaseHTTPRequestHandler):
                         g_record_hash.labels(record_name=record_name, record_type=type_name, value=v).set(hash_fun(v))
 
                     joined = ",".join(values)
-                    g_record_hash_all.labels(record_name=record_name, record_type=type_name).set(hash_fun(joined))
+                    g_record_hash_all.labels(record_name=record_name, record_type=type_name, value=joined).set(hash_fun(joined))
 
                     if min_ttl is not None:
                         g_ttl.labels(record_name=record_name, record_type=type_name).set(float(min_ttl))
