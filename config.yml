@@ -12,3 +12,8 @@ modules:
     query_type: MX
     server: "1.1.1.1"
     timeout: 5s
+  dig-google-dns:
+    prober: dig            # dig-like probe: NS, A, CNAME, MX, TXT + autodiscover/DKIM selectors
+    protocol: ipv4
+    server: "8.8.8.8"
+    timeout: 5s

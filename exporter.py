@@ -8,6 +8,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import dns.flags
 import dns.message
 import dns.query
 import dns.rdatatype
@@ -49,6 +50,16 @@ def dns_query_mx_udp(name: str, server: str, timeout: float):
     return resp, (t1 - t0)
 
 
+def dns_query_generic_udp(name: str, rdtype, server: str, timeout: float):
+    # EDNS0 + TCP fallback on truncation, needed for larger TXT (SPF/DMARC) answers
+    q = dns.message.make_query(name, rdtype, use_edns=0, payload=4096)
+    t0 = time.perf_counter()
+    resp = dns.query.udp(q, server, timeout=timeout, ignore_unexpected=True)
+    if resp.flags & dns.flags.TC:
+        resp = dns.query.tcp(q, server, timeout=timeout)
+    t1 = time.perf_counter()
+    return resp, (t1 - t0)
+
 def tcp_connect_check(server: str, port: int, timeout: float):
     t0 = time.perf_counter()
     with socket.create_connection((server, port), timeout=timeout):
@@ -83,6 +94,29 @@ def extract_mx_records_and_min_ttl(resp: dns.message.Message):
                     min_ttl = ttl
     return mx_list, min_ttl
 
+def extract_records(resp: dns.message.Message, rdtype):
+    records = []
+    min_ttl = None
+    for ans in resp.answer:
+        if ans.rdtype == rdtype:
+            records.extend(list(ans))
+            if min_ttl is None or ans.ttl < min_ttl:
+                min_ttl = ans.ttl
+    return records, min_ttl
+
+def rr_to_text(rr, rdtype) -> str:
+    if rdtype == dns.rdatatype.NS:
+        return str(rr.target).rstrip(".")
+    if rdtype == dns.rdatatype.A:
+        return rr.address
+    if rdtype == dns.rdatatype.CNAME:
+        return str(rr.target).rstrip(".")
+    if rdtype == dns.rdatatype.MX:
+        return f"{rr.preference} {str(rr.exchange).rstrip('.')}"
+    if rdtype == dns.rdatatype.TXT:
+        return b"".join(rr.strings).decode("utf-8", errors="replace")
+    return str(rr)
+
 # ---------- HTTP handler ----------
 class ProbeHandler(BaseHTTPRequestHandler):
     server_version = "dnsp_exporter/0.1"
@@ -114,10 +148,11 @@ class ProbeHandler(BaseHTTPRequestHandler):
             return
 
         # defaults / validation
-        if str(mod.get("prober", "dns")) != "dns":
+        prober = str(mod.get("prober", "dns"))
+        if prober not in ("dns", "dig"):
             self.send_response(400)
             self.end_headers()
-            self.wfile.write(b"only prober=dns is supported")
+            self.wfile.write(b"only prober=dns or prober=dig is supported")
             return
 
         server_ip = str(mod.get("server", "")).strip()
@@ -127,14 +162,29 @@ class ProbeHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"module.server is required")
             return
 
+        timeout_s = parse_duration(mod.get("timeout", "5s"))
+
+        if prober == "dig":
+            output = self._probe_dig(target, server_ip, timeout_s)
+        else:
+            output = self._probe_dns(mod, target, server_ip, timeout_s)
+
+        if output is None:
+            return  # error response already sent by the handler
+
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+        self.send_header("Content-Length", str(len(output)))
+        self.end_headers()
+        self.wfile.write(output)
+
+    def _probe_dns(self, mod, target, server_ip, timeout_s):
         query_type = str(mod.get("query_type")).upper()
         if query_type not in ("A", "MX"):
             self.send_response(400)
             self.end_headers()
             self.wfile.write(b"only query_type=A or query_type=MX is supported")
-            return
-
-        timeout_s = parse_duration(mod.get("timeout", "5s"))
+            return None
 
         # registry for one response
         registry = CollectorRegistry()
@@ -248,13 +298,117 @@ class ProbeHandler(BaseHTTPRequestHandler):
             g_dur.labels(phase="resolve").set(overall_time)
             g_success.set(success)
 
-        # Prometheus response as text
-        output = generate_latest(registry)
-        self.send_response(200)
-        self.send_header("Content-Type", CONTENT_TYPE_LATEST)
-        self.send_header("Content-Length", str(len(output)))
-        self.end_headers()
-        self.wfile.write(output)
+        return generate_latest(registry)
+
+    def _probe_dig(self, target, server_ip, timeout_s):
+        registry = CollectorRegistry()
+        g_success = Gauge("dnsp_probe_success", "Probe success (1/0)", registry=registry)
+        g_rcode = Gauge(
+            "dnsp_probe_dns_rcode",
+            "DNS rcode per queried record",
+            ["record_name", "record_type", "rcode"],
+            registry=registry,
+        )
+        g_dur = Gauge("dnsp_probe_dns_duration_seconds", "DNS probe durations", ["phase"], registry=registry)
+        g_ttl = Gauge(
+            "dnsp_probe_dig_ttl_seconds",
+            "Min TTL for a queried record",
+            ["record_name", "record_type"],
+            registry=registry,
+        )
+        g_record = Gauge(
+            "dnsp_probe_dig_record",
+            "Resolved dig record (existence flag)",
+            ["record_name", "record_type", "value"],
+            registry=registry,
+        )
+        g_record_hash = Gauge(
+            "dnsp_probe_dig_record_hash",
+            "murmurhash2 hash of a single record value",
+            ["record_name", "record_type", "value"],
+            registry=registry,
+        )
+        g_record_hash_all = Gauge(
+            "dnsp_probe_dig_record_hash_all",
+            "murmurhash2 hash of all sorted values for one record_name/record_type",
+            ["record_name", "record_type"],
+            registry=registry,
+        )
+        g_domain_hash = Gauge(
+            "dnsp_probe_dig_domain_hash",
+            "murmurhash2 hash of every resolved value for the domain, use to detect any DNS change",
+            ["domain"],
+            registry=registry,
+        )
+
+        # apex: NS / A / CNAME / MX / TXT, plus the well-known autodiscover and DKIM selector names
+        queries = [
+            (target, (dns.rdatatype.NS, dns.rdatatype.A, dns.rdatatype.CNAME, dns.rdatatype.MX, dns.rdatatype.TXT)),
+            (f"autodiscover.{target}", (dns.rdatatype.A, dns.rdatatype.CNAME, dns.rdatatype.TXT)),
+            (f"selector1._domainkey.{target}", (dns.rdatatype.CNAME, dns.rdatatype.TXT)),
+            (f"selector2._domainkey.{target}", (dns.rdatatype.CNAME, dns.rdatatype.TXT)),
+        ]
+
+        overall_start = time.perf_counter()
+        success = 0
+        domain_parts = []
+
+        try:
+            connect_time = tcp_connect_check(server_ip, 53, timeout_s)
+            g_dur.labels(phase="connect").set(connect_time)
+
+            for record_name, rdtypes in queries:
+                for rdtype in rdtypes:
+                    type_name = dns.rdatatype.to_text(rdtype)
+                    try:
+                        resp, _req_time = dns_query_generic_udp(record_name, rdtype, server_ip, timeout_s)
+                    except socket.timeout:
+                        g_rcode.labels(record_name=record_name, record_type=type_name, rcode="TIMEOUT").set(1)
+                        continue
+                    except Exception:
+                        g_rcode.labels(record_name=record_name, record_type=type_name, rcode="ERROR").set(1)
+                        continue
+
+                    rcode_val = resp.rcode()
+                    rcode_name = dns.rcode.to_text(rcode_val)
+                    g_rcode.labels(record_name=record_name, record_type=type_name, rcode=rcode_name).set(1)
+
+                    if rcode_val != dns.rcode.NOERROR:
+                        continue
+
+                    records, min_ttl = extract_records(resp, rdtype)
+                    if not records:
+                        continue
+
+                    values = sorted(set(rr_to_text(rr, rdtype) for rr in records))
+                    for v in values:
+                        g_record.labels(record_name=record_name, record_type=type_name, value=v).set(1)
+                        g_record_hash.labels(record_name=record_name, record_type=type_name, value=v).set(hash_fun(v))
+
+                    joined = ",".join(values)
+                    g_record_hash_all.labels(record_name=record_name, record_type=type_name).set(hash_fun(joined))
+
+                    if min_ttl is not None:
+                        g_ttl.labels(record_name=record_name, record_type=type_name).set(float(min_ttl))
+
+                    domain_parts.append(f"{record_name}|{type_name}|{joined}")
+                    success = 1
+
+            if domain_parts:
+                g_domain_hash.labels(domain=target).set(hash_fun("\n".join(sorted(domain_parts))))
+
+        except socket.timeout:
+            g_rcode.labels(record_name=target, record_type="ANY", rcode="TIMEOUT").set(1)
+            success = 0
+        except Exception:
+            g_rcode.labels(record_name=target, record_type="ANY", rcode="ERROR").set(1)
+            success = 0
+        finally:
+            overall_time = time.perf_counter() - overall_start
+            g_dur.labels(phase="resolve").set(overall_time)
+            g_success.set(success)
+
+        return generate_latest(registry)
 
 def load_config(path: str):
     with open(path, "r", encoding="utf-8") as f:
